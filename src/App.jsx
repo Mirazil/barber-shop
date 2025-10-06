@@ -1,5 +1,43 @@
 import React, { useEffect, useMemo, useState } from "react";
 
+const BARBER_IMAGE_MODULES = import.meta.glob(
+  "./assets/barbers/*.{svg,jpg,jpeg,png,webp}",
+  {
+    eager: true,
+    import: "default",
+  }
+);
+
+const PREFERRED_BARBER_IMAGE_EXTENSIONS = [
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".webp",
+  ".svg",
+];
+
+function resolveBarberImage(fileBaseName) {
+  for (const ext of PREFERRED_BARBER_IMAGE_EXTENSIONS) {
+    const exactPath = `./assets/barbers/${fileBaseName}${ext}`;
+    if (exactPath in BARBER_IMAGE_MODULES) {
+      return BARBER_IMAGE_MODULES[exactPath];
+    }
+  }
+
+  const fallbackEntry = Object.entries(BARBER_IMAGE_MODULES).find(([path]) =>
+    path.includes(`/assets/barbers/${fileBaseName}.`)
+  );
+
+  if (fallbackEntry) {
+    return fallbackEntry[1];
+  }
+
+  console.warn(
+    `Barber image for "${fileBaseName}" not found in ./assets/barbers directory.`
+  );
+  return "";
+}
+
 // --- JSONP loader: обходим CORS для GET-запросов к Apps Script
 function jsonp(url) {
   return new Promise((resolve, reject) => {
@@ -93,10 +131,34 @@ const SERVICES = [
 ];
 
 const BARBERS = [
-  { id: "oleksii", name: "Олексій", tags: "Fade • Classic" },
-  { id: "bohdan", name: "Богдан", tags: "Beard • Texture" },
-  { id: "taras", name: "Тарас", tags: "Scissor • Long" },
-  { id: "ihor", name: "Ігор", tags: "Skin fade • Style" },
+  {
+    id: "oleksii",
+    name: "Олексій",
+    tags: "Fade • Classic",
+    bio: "Точність форм і чисті фейди.",
+    image: resolveBarberImage("oleksii"),
+  },
+  {
+    id: "bohdan",
+    name: "Богдан",
+    tags: "Beard • Texture",
+    bio: "Підбір форми бороди під овал обличчя.",
+    image: resolveBarberImage("bohdan"),
+  },
+  {
+    id: "taras",
+    name: "Тарас",
+    tags: "Scissor • Long",
+    bio: "Акуратна робота з довгим волоссям.",
+    image: resolveBarberImage("taras"),
+  },
+  {
+    id: "ihor",
+    name: "Ігор",
+    tags: "Skin fade • Style",
+    bio: "Сучасні тренди й стайлінг.",
+    image: resolveBarberImage("ihor"),
+  },
 ];
 
 // Простая генерация слотов по 30 минут на сегодня+7 дней.
@@ -920,33 +982,6 @@ function Services({ onCta }) {
 }
 
 function Barbers({ onCta }) {
-  const barbers = [
-    {
-      name: "Олексій",
-      tag: "Fade • Classic",
-      bio: "Точність форм і чисті фейди.",
-      initials: "О",
-    },
-    {
-      name: "Богдан",
-      tag: "Beard • Texture",
-      bio: "Підбір форми бороди під овал обличчя.",
-      initials: "Б",
-    },
-    {
-      name: "Тарас",
-      tag: "Scissor • Long",
-      bio: "Акуратна робота з довгим волоссям.",
-      initials: "Т",
-    },
-    {
-      name: "Ігор",
-      tag: "Skin fade • Style",
-      bio: "Сучасні тренди й стайлінг.",
-      initials: "І",
-    },
-  ];
-
   return (
     <section id="barbers" className="py-16">
       <Container>
@@ -955,18 +990,23 @@ function Barbers({ onCta }) {
           subtitle="Команда майстрів, які люблять свою справу"
         />
         <div className="mt-8 grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          {barbers.map((b) => (
+          {BARBERS.map((b) => (
             <div
-              key={b.name}
+              key={b.id}
               className="group rounded-2xl border border-white/10 bg-white/5 p-6 hover:border-white/20 transition"
             >
               <div className="flex items-center gap-4">
-                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-tr from-white/20 to-white/5 font-extrabold text-xl">
-                  {b.initials}
+                <div className="relative h-20 w-20 overflow-hidden rounded-2xl border border-white/10 bg-white/10">
+                  <img
+                    src={b.image}
+                    alt={`Барбер ${b.name}`}
+                    className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                    loading="lazy"
+                  />
                 </div>
                 <div>
                   <h3 className="font-semibold leading-tight">{b.name}</h3>
-                  <p className="text-xs text-white/60">{b.tag}</p>
+                  <p className="text-xs text-white/60">{b.tags}</p>
                 </div>
               </div>
               <p className="mt-4 text-sm text-white/70">{b.bio}</p>
@@ -989,6 +1029,24 @@ function Barbers({ onCta }) {
 }
 
 function Gallery() {
+  const galleryImages = [
+    { file: "barber1.jpg", alt: "Інтер'єр барбершопу — зона очікування" },
+    { file: "barber2.jpg", alt: "Робоче місце барбера" },
+    { file: "barber3.jpg", alt: "Стильний декор салону" },
+    { file: "barber4.jpg", alt: "Барбер за роботою" },
+    { file: "barber5.jpg", alt: "Полиця з косметикою" },
+    { file: "barber6.jpg", alt: "Команда барберів" },
+    { file: "barber7.jpg", alt: "Затишна кавова зона" },
+    { file: "barber8.jpg", alt: "Барбер робить укладку" },
+    { file: "barber9.jpg", alt: "Стійка рецепції" },
+    { file: "barber10.jpg", alt: "Інтер'єр із неоновою вивіскою" },
+    { file: "barber11.jpg", alt: "Деталь інтер'єру" },
+    { file: "barber12.jpg", alt: "Стильний куточок салону" },
+  ].map((image) => ({
+    src: `/interior/${image.file}`,
+    alt: image.alt,
+  }));
+
   return (
     <section id="gallery" className="py-16 border-y border-white/5 bg-white/5">
       <Container>
@@ -997,11 +1055,18 @@ function Gallery() {
           subtitle="Лаконічний інтер'єр, музика та кава"
         />
         <div className="mt-8 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          {Array.from({ length: 12 }).map((_, i) => (
+          {galleryImages.map((image, index) => (
             <div
-              key={i}
-              className="aspect-[4/3] rounded-2xl bg-gradient-to-br from-white/15 to-white/5 border border-white/10"
-            />
+              key={index}
+              className="aspect-[4/3] overflow-hidden rounded-2xl border border-white/10 bg-black/20"
+            >
+              <img
+                src={image.src}
+                alt={image.alt}
+                className="h-full w-full object-cover"
+                loading="lazy"
+              />
+            </div>
           ))}
         </div>
       </Container>
@@ -1085,8 +1150,13 @@ function Contacts({ onCta }) {
             </div>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
-            <div className="aspect-[16/10] w-full rounded-xl bg-gradient-to-br from-white/15 to-white/5 grid place-items-center text-white/60 text-sm">
-              Карта з'явиться пізніше
+            <div className="aspect-[16/10] w-full overflow-hidden rounded-xl">
+              <img
+                src={mapImage}
+                alt="Карта розташування барбершопу BRAVE BARBER"
+                className="h-full w-full object-cover"
+                loading="lazy"
+              />
             </div>
           </div>
         </div>
