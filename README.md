@@ -4,6 +4,8 @@
 
 👉 [GitHub Repo](https://github.com/Mirazil/barber-shop)
 
+👉 [Vercel Deploy Link](https://barber-shop-dliag3r6n-mirazils-projects.vercel.app/)
+
 The main idea of this project is to create a simple **web service for a barber shop** that allows clients to:
 
 - view information about the barbershop (landing page);
