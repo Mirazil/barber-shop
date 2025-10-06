@@ -1,42 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-
-const BARBER_IMAGE_MODULES = import.meta.glob(
-  "./assets/barbers/*.{svg,jpg,jpeg,png,webp}",
-  {
-    eager: true,
-    import: "default",
-  }
-);
-
-const PREFERRED_BARBER_IMAGE_EXTENSIONS = [
-  ".jpg",
-  ".jpeg",
-  ".png",
-  ".webp",
-  ".svg",
-];
-
-function resolveBarberImage(fileBaseName) {
-  for (const ext of PREFERRED_BARBER_IMAGE_EXTENSIONS) {
-    const exactPath = `./assets/barbers/${fileBaseName}${ext}`;
-    if (exactPath in BARBER_IMAGE_MODULES) {
-      return BARBER_IMAGE_MODULES[exactPath];
-    }
-  }
-
-  const fallbackEntry = Object.entries(BARBER_IMAGE_MODULES).find(([path]) =>
-    path.includes(`/assets/barbers/${fileBaseName}.`)
-  );
-
-  if (fallbackEntry) {
-    return fallbackEntry[1];
-  }
-
-  console.warn(
-    `Barber image for "${fileBaseName}" not found in ./assets/barbers directory.`
-  );
-  return "";
-}
+import mapImage from "./map.png";
 
 // --- JSONP loader: обходим CORS для GET-запросов к Apps Script
 function jsonp(url) {
@@ -131,34 +94,10 @@ const SERVICES = [
 ];
 
 const BARBERS = [
-  {
-    id: "oleksii",
-    name: "Олексій",
-    tags: "Fade • Classic",
-    bio: "Точність форм і чисті фейди.",
-    image: resolveBarberImage("oleksii"),
-  },
-  {
-    id: "bohdan",
-    name: "Богдан",
-    tags: "Beard • Texture",
-    bio: "Підбір форми бороди під овал обличчя.",
-    image: resolveBarberImage("bohdan"),
-  },
-  {
-    id: "taras",
-    name: "Тарас",
-    tags: "Scissor • Long",
-    bio: "Акуратна робота з довгим волоссям.",
-    image: resolveBarberImage("taras"),
-  },
-  {
-    id: "ihor",
-    name: "Ігор",
-    tags: "Skin fade • Style",
-    bio: "Сучасні тренди й стайлінг.",
-    image: resolveBarberImage("ihor"),
-  },
+  { id: "oleksii", name: "Олексій", tags: "Fade • Classic" },
+  { id: "bohdan", name: "Богдан", tags: "Beard • Texture" },
+  { id: "taras", name: "Тарас", tags: "Scissor • Long" },
+  { id: "ihor", name: "Ігор", tags: "Skin fade • Style" },
 ];
 
 // Простая генерация слотов по 30 минут на сегодня+7 дней.
@@ -982,6 +921,33 @@ function Services({ onCta }) {
 }
 
 function Barbers({ onCta }) {
+  const barbers = [
+    {
+      name: "Олексій",
+      tag: "Fade • Classic",
+      bio: "Точність форм і чисті фейди.",
+      initials: "О",
+    },
+    {
+      name: "Богдан",
+      tag: "Beard • Texture",
+      bio: "Підбір форми бороди під овал обличчя.",
+      initials: "Б",
+    },
+    {
+      name: "Тарас",
+      tag: "Scissor • Long",
+      bio: "Акуратна робота з довгим волоссям.",
+      initials: "Т",
+    },
+    {
+      name: "Ігор",
+      tag: "Skin fade • Style",
+      bio: "Сучасні тренди й стайлінг.",
+      initials: "І",
+    },
+  ];
+
   return (
     <section id="barbers" className="py-16">
       <Container>
@@ -990,23 +956,18 @@ function Barbers({ onCta }) {
           subtitle="Команда майстрів, які люблять свою справу"
         />
         <div className="mt-8 grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          {BARBERS.map((b) => (
+          {barbers.map((b) => (
             <div
-              key={b.id}
+              key={b.name}
               className="group rounded-2xl border border-white/10 bg-white/5 p-6 hover:border-white/20 transition"
             >
               <div className="flex items-center gap-4">
-                <div className="relative h-20 w-20 overflow-hidden rounded-2xl border border-white/10 bg-white/10">
-                  <img
-                    src={b.image}
-                    alt={`Барбер ${b.name}`}
-                    className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
-                    loading="lazy"
-                  />
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-tr from-white/20 to-white/5 font-extrabold text-xl">
+                  {b.initials}
                 </div>
                 <div>
                   <h3 className="font-semibold leading-tight">{b.name}</h3>
-                  <p className="text-xs text-white/60">{b.tags}</p>
+                  <p className="text-xs text-white/60">{b.tag}</p>
                 </div>
               </div>
               <p className="mt-4 text-sm text-white/70">{b.bio}</p>
