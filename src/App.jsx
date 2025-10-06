@@ -1,49 +1,199 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
-// УВАГА: Це лише UI-макет лендінгу.
-// Усі кнопки "Записатись" наразі показують підказку і НЕ переходять за посиланням.
-// Пізніше ми підключимо реальну сторінку /booking та інтеграцію з Google Calendar.
+// --- JSONP loader: обходим CORS для GET-запросов к Apps Script
+function jsonp(url) {
+  return new Promise((resolve, reject) => {
+    const cbName = "cb_" + Math.random().toString(36).slice(2);
+    const script = document.createElement("script");
+    const sep = url.includes("?") ? "&" : "?";
+    script.src = `${url}${sep}callback=${cbName}`;
+    script.async = true;
+    window[cbName] = (data) => {
+      resolve(data);
+      cleanup();
+    };
+    script.onerror = () => {
+      reject(new Error("JSONP load error"));
+      cleanup();
+    };
+    function cleanup() {
+      delete window[cbName];
+      script.remove();
+    }
+    document.head.appendChild(script);
+  });
+}
 
+async function fetchBusyForDate(dayISO) {
+  const endpoint = import.meta.env.VITE_BOOKING_ENDPOINT;
+  const secret = import.meta.env.VITE_BOOKING_SECRET;
+  const url = `${endpoint}?action=busy&date=${encodeURIComponent(
+    dayISO
+  )}&secret=${encodeURIComponent(secret)}`;
+  const data = await jsonp(url);
+  if (!data || !data.ok) throw new Error(data?.error || "Busy fetch failed");
+  // вернём массив [{startISO, endISO}]
+  return data.busy || [];
+}
+
+function overlaps(aStart, aEnd, bStart, bEnd) {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+async function submitBooking(payload) {
+  const endpoint = import.meta.env.VITE_BOOKING_ENDPOINT;
+  const secret = import.meta.env.VITE_BOOKING_SECRET;
+  if (!endpoint || !secret) {
+    throw new Error("Не налаштовано VITE_BOOKING_ENDPOINT/VITE_BOOKING_SECRET");
+  }
+
+  // ВАЖНО: no-cors + text/plain — браузер не делает preflight и не требует CORS-заголовок в ответе
+  await fetch(endpoint, {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ ...payload, secret }),
+  });
+
+  // В режиме no-cors ответ «нечитаемый» (opaque). Если сюда дошли — запрос ушёл.
+  // Дальше просто считаем успехом; факт появление события проверяем в календаре.
+  return { ok: true };
+}
+
+/**
+ * ВНИМАНИЕ:
+ * 1) Это шаг №1: только UI-макет страницы /booking (без реальной интеграции).
+ * 2) После подтверждения от тебя мы добавим интеграцию с Google Calendar:
+ *    - самый простой путь для новичка — Google Apps Script Web App (серверная точка),
+ *    - альтернатива — серверлесс-функция (Vercel / Supabase Edge) с OAuth2.
+ */
+
+/* ------------------------- ЛЁГКИЙ РОУТЕР ------------------------- */
+function useRoute() {
+  const [route, setRoute] = useState(window.location.pathname || "/");
+  useEffect(() => {
+    const onPop = () => setRoute(window.location.pathname || "/");
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  const navigate = (to) => {
+    if (to === route) return;
+    window.history.pushState({}, "", to);
+    setRoute(to);
+  };
+  return { route, navigate };
+}
+
+/* ------------------------- ДАННЫЕ ДЛЯ БРОНИ ------------------------- */
+const SERVICES = [
+  { id: "haircut", name: "Стрижка чоловіча", price: 700, durationMin: 45 },
+  { id: "combo", name: "Стрижка + борода", price: 1000, durationMin: 75 },
+  { id: "shave", name: "Гоління бритвою", price: 600, durationMin: 40 },
+  { id: "camouflage", name: "Камуфляж сивини", price: 500, durationMin: 30 },
+];
+
+const BARBERS = [
+  { id: "oleksii", name: "Олексій", tags: "Fade • Classic" },
+  { id: "bohdan", name: "Богдан", tags: "Beard • Texture" },
+  { id: "taras", name: "Тарас", tags: "Scissor • Long" },
+  { id: "ihor", name: "Ігор", tags: "Skin fade • Style" },
+];
+
+// Простая генерация слотов по 30 минут на сегодня+7 дней.
+// В реальном проекте слоты будем получать с сервера/календаря.
+function generateSlots(stepMin = 30, startHour = 10, endHour = 21, days = 7) {
+  const res = [];
+  const now = new Date();
+  for (let d = 0; d < days; d++) {
+    const date = new Date(now);
+    date.setDate(now.getDate() + d);
+    date.setHours(0, 0, 0, 0);
+    const dayISO = date.toISOString().slice(0, 10); // YYYY-MM-DD
+
+    for (let h = startHour; h < endHour; h++) {
+      for (let m = 0; m < 60; m += stepMin) {
+        const slot = new Date(date);
+        slot.setHours(h, m, 0, 0);
+        // не предлагаем прошедшие слоты для сегодняшнего дня
+        if (d === 0 && slot < now) continue;
+        res.push({ dayISO, time: slot.toTimeString().slice(0, 5) }); // HH:MM
+      }
+    }
+  }
+  return res;
+}
+
+const ALL_SLOTS = generateSlots();
+
+/* ------------------------- ГЛАВНЫЙ КОМПОНЕНТ ------------------------- */
 export default function App() {
+  const { route, navigate } = useRoute();
   const [toast, setToast] = useState(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  function showToast(message = "Сторінка запису буде доступна незабаром") {
+  function showToast(message, ms = 2500) {
     setToast(message);
     window.clearTimeout(showToast._tid);
-    showToast._tid = window.setTimeout(() => setToast(null), 2500);
+    showToast._tid = window.setTimeout(() => setToast(null), ms);
   }
 
-  function handleBookingClick(e) {
-    e.preventDefault();
-    showToast();
+  function goBooking(e) {
+    if (e) e.preventDefault();
+    navigate("/booking");
+    setMobileMenuOpen(false);
   }
 
   useEffect(() => {
-    // Невелика анімація появи при завантаженні
     document.documentElement.classList.add("scroll-smooth");
   }, []);
 
+  const isBooking = route === "/booking";
+  const isAdmin = route === "/admin";
+
   return (
     <div className="min-h-screen bg-neutral-950 text-white selection:bg-white/20">
-      <SiteHeader
-        onCta={handleBookingClick}
-        mobileMenuOpen={mobileMenuOpen}
-        setMobileMenuOpen={setMobileMenuOpen}
-      />
+      {!isBooking && (
+        <SiteHeader
+          onCta={goBooking}
+          mobileMenuOpen={mobileMenuOpen}
+          setMobileMenuOpen={setMobileMenuOpen}
+        />
+      )}
 
       <main>
-        <Hero onCta={handleBookingClick} />
-        <Benefits onCta={handleBookingClick} />
-        <Services onCta={handleBookingClick} />
-        <Barbers onCta={handleBookingClick} />
-        <Gallery />
-        <Testimonials />
-        <Contacts onCta={handleBookingClick} />
-        <CtaBanner onCta={handleBookingClick} />
+        {isAdmin ? (
+          <AdminPage onBack={() => navigate("/")} />
+        ) : isBooking ? (
+          <BookingPage
+            onBack={() => navigate("/")}
+            onSuccess={async (payload) => {
+              try {
+                const result = await submitBooking(payload);
+                showToast("✅ Запис підтверджено у календарі");
+                setTimeout(() => navigate("/"), 1000);
+                console.log("Booking payload:", payload);
+                console.log("Google Calendar response:", result);
+              } catch (err) {
+                alert("❌ Не вдалося створити запис: " + err.message);
+                console.error("Booking error:", err);
+              }
+            }}
+          />
+        ) : (
+          <>
+            <Hero onCta={goBooking} />
+            <Benefits onCta={goBooking} />
+            <Services onCta={goBooking} />
+            <Barbers onCta={goBooking} />
+            <Gallery />
+            <Testimonials />
+            <Contacts onCta={goBooking} />
+            <CtaBanner onCta={goBooking} />
+          </>
+        )}
       </main>
 
-      <SiteFooter onCta={handleBookingClick} />
+      {!isBooking && <SiteFooter onCta={goBooking} />}
 
       {/* Toast */}
       <div
@@ -61,6 +211,398 @@ export default function App() {
   );
 }
 
+/* ------------------------- СТРАНИЦА /booking ------------------------- */
+function BookingPage({ onBack, onSuccess }) {
+  const [serviceId, setServiceId] = useState(SERVICES[0].id);
+  const [barberId, setBarberId] = useState(BARBERS[0].id);
+  const [dayISO, setDayISO] = useState(ALL_SLOTS[0]?.dayISO || "");
+  const [time, setTime] = useState(ALL_SLOTS[0]?.time || "");
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+
+  // === NEW: состояние занятых интервалов + индикатор загрузки
+  const [busyIntervals, setBusyIntervals] = useState([]); // [{startISO,endISO}]
+  const [loadingBusy, setLoadingBusy] = useState(false);
+
+  const service = useMemo(
+    () => SERVICES.find((s) => s.id === serviceId),
+    [serviceId]
+  );
+  const barber = useMemo(
+    () => BARBERS.find((b) => b.id === barberId),
+    [barberId]
+  );
+
+  // === NEW: список доступных дат из ALL_SLOTS
+  const days = useMemo(() => [...new Set(ALL_SLOTS.map((s) => s.dayISO))], []);
+
+  // === NEW: слоты времени, отфильтрованные по занятости и длительности услуги
+  const availableTimes = useMemo(() => {
+    const dayTimes = ALL_SLOTS.filter((s) => s.dayISO === dayISO).map(
+      (s) => s.time
+    );
+
+    if (!busyIntervals.length) return dayTimes;
+
+    const svcMin = service.durationMin;
+    return dayTimes.filter((t) => {
+      const start = new Date(`${dayISO}T${t}:00`);
+      const end = new Date(start.getTime() + svcMin * 60000);
+      return !busyIntervals.some((bi) =>
+        overlaps(start, end, new Date(bi.startISO), new Date(bi.endISO))
+      );
+    });
+  }, [dayISO, busyIntervals, service.durationMin]);
+
+  // === NEW: при смене даты — подтягиваем занятые интервалы из календаря
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoadingBusy(true);
+        const busy = await fetchBusyForDate(dayISO);
+        if (!cancelled) setBusyIntervals(busy);
+      } catch (e) {
+        console.error("Busy fetch error:", e);
+        if (!cancelled) setBusyIntervals([]);
+      } finally {
+        if (!cancelled) setLoadingBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dayISO]);
+
+  // === FIX: автоподстановка первого доступного времени (раньше было timesForDay)
+  useEffect(() => {
+    if (availableTimes.length && !availableTimes.includes(time)) {
+      setTime(availableTimes[0]);
+    }
+  }, [dayISO, availableTimes]); // завязка на availableTimes, а не на timesForDay
+
+  function validate() {
+    const errors = [];
+    if (!name.trim()) errors.push("Вкажіть ім'я");
+    if (!/^\+?\d[\d\s\-()]{7,}$/.test(phone.trim()))
+      errors.push("Вкажіть коректний телефон");
+    if (!dayISO || !time) errors.push("Оберіть дату та час");
+    return errors;
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const errors = validate();
+    if (errors.length) {
+      alert("Будь ласка, виправте:\n• " + errors.join("\n• "));
+      return;
+    }
+
+    // Доп. проверка: выбранный слот ещё доступен?
+    if (!availableTimes.includes(time)) {
+      alert("На жаль, цей слот уже зайнятий. Оберіть інший час.");
+      return;
+    }
+
+    const startDateTime = new Date(`${dayISO}T${time}:00`);
+    const payload = {
+      customer: { name: name.trim(), phone: phone.trim() },
+      service: {
+        id: service.id,
+        name: service.name,
+        price: service.price,
+        durationMin: service.durationMin,
+      },
+      barber: { id: barber.id, name: barber.name },
+      startISO: startDateTime.toISOString(),
+      endISO: new Date(
+        startDateTime.getTime() + service.durationMin * 60000
+      ).toISOString(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      note: "",
+    };
+
+    // onSuccess у тебя вызывает submitBooking(payload) во внешнем компоненте App()
+    onSuccess?.(payload);
+  }
+
+  return (
+    <section className="min-h-screen">
+      <Container className="py-8">
+        <button
+          onClick={onBack}
+          className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm hover:bg-white/10"
+        >
+          ← На головну
+        </button>
+
+        <h1 className="mt-6 text-3xl sm:text-4xl font-extrabold tracking-tight">
+          Запис на послугу
+        </h1>
+        <p className="mt-2 text-white/70">
+          Оберіть послугу, майстра, дату та час. Після підтвердження ми
+          надішлемо подальші інструкції.
+        </p>
+
+        <form
+          onSubmit={handleSubmit}
+          className="mt-8 grid lg:grid-cols-3 gap-6"
+        >
+          {/* Левая колонка: выборы */}
+          <div className="space-y-6 lg:col-span-2">
+            <Card title="Послуга">
+              <Select
+                value={serviceId}
+                onChange={(e) => setServiceId(e.target.value)}
+                options={SERVICES.map((s) => ({
+                  value: s.id,
+                  label: `${s.name} — ${s.price} грн • ${s.durationMin} хв`,
+                }))}
+              />
+            </Card>
+
+            <Card title="Барбер">
+              <div className="grid sm:grid-cols-2 gap-3">
+                {BARBERS.map((b) => (
+                  <label
+                    key={b.id}
+                    className={`cursor-pointer rounded-xl border p-4 transition ${
+                      barberId === b.id
+                        ? "border-white/60 bg-white/10"
+                        : "border-white/15 hover:bg-white/5"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="barber"
+                      value={b.id}
+                      checked={barberId === b.id}
+                      onChange={() => setBarberId(b.id)}
+                      className="hidden"
+                    />
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white/10 font-bold">
+                        {b.name[0]}
+                      </div>
+                      <div>
+                        <div className="font-semibold">{b.name}</div>
+                        <div className="text-xs text-white/60">{b.tags}</div>
+                      </div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </Card>
+
+            <Card title="Дата і час">
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm text-white/60">Дата</label>
+                  <Select
+                    value={dayISO}
+                    onChange={(e) => setDayISO(e.target.value)}
+                    options={days.map((d) => ({
+                      value: d,
+                      label: formatDay(d),
+                    }))}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm text-white/60">Час</label>
+                  <Select
+                    value={time}
+                    onChange={(e) => setTime(e.target.value)}
+                    options={availableTimes.map((t) => ({
+                      value: t,
+                      label: t,
+                    }))}
+                  />
+                  {loadingBusy && (
+                    <div className="mt-2 text-xs text-white/60">
+                      Оновлюємо доступні слоти…
+                    </div>
+                  )}
+                  {!loadingBusy && availableTimes.length === 0 && (
+                    <div className="mt-2 text-xs text-rose-400">
+                      На цю дату слоти недоступні
+                    </div>
+                  )}
+                </div>
+              </div>
+            </Card>
+
+            <Card title="Ваші контакти">
+              <div className="grid sm:grid-cols-2 gap-4">
+                <Field
+                  label="Ім'я"
+                  placeholder="Як до вас звертатись?"
+                  value={name}
+                  onChange={setName}
+                />
+                <Field
+                  label="Телефон"
+                  placeholder="+380 ..."
+                  value={phone}
+                  onChange={setPhone}
+                />
+              </div>
+            </Card>
+          </div>
+
+          {/* Правая колонка: итог */}
+          <div className="space-y-6">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+              <h3 className="font-semibold text-lg">Підсумок</h3>
+              <ul className="mt-4 space-y-2 text-sm text-white/80">
+                <li>
+                  <span className="text-white/60">Послуга:</span> {service.name}
+                </li>
+                <li>
+                  <span className="text-white/60">Тривалість:</span>{" "}
+                  {service.durationMin} хв
+                </li>
+                <li>
+                  <span className="text-white/60">Барбер:</span> {barber.name}
+                </li>
+                <li>
+                  <span className="text-white/60">Дата:</span>{" "}
+                  {formatDay(dayISO)}
+                </li>
+                <li>
+                  <span className="text-white/60">Час:</span> {time}
+                </li>
+              </ul>
+              <div className="mt-4 flex items-center justify-between">
+                <span className="text-xl font-extrabold bg-white text-neutral-900 px-3 py-1 rounded-xl">
+                  {service.price} грн
+                </span>
+              </div>
+              <button
+                type="submit"
+                className="mt-6 w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-white text-neutral-900 px-6 py-3 font-semibold shadow hover:bg-white/90 transition"
+              >
+                <BoltIcon className="h-5 w-5" />
+                Підтвердити запис
+              </button>
+              <p className="mt-3 text-xs text-white/60">
+                Натискаючи кнопку, ви погоджуєтесь на обробку персональних
+                даних.
+              </p>
+            </div>
+          </div>
+        </form>
+      </Container>
+    </section>
+  );
+}
+
+/* ------------------------- /admin ------------------------- */
+function AdminPage({ onBack }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // период: текущий месяц
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const start = `${yyyy}-${mm}-01`;
+  const endDate = new Date(yyyy, now.getMonth() + 1, 0).getDate();
+  const end = `${yyyy}-${mm}-${String(endDate).padStart(2, "0")}`;
+
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      try {
+        const endpoint = import.meta.env.VITE_BOOKING_ENDPOINT;
+        const secret = import.meta.env.VITE_BOOKING_SECRET;
+        const url = `${endpoint}?action=list&start=${start}&end=${end}&secret=${encodeURIComponent(
+          secret
+        )}`;
+        const data = await jsonp(url); // функция jsonp у тебя уже есть сверху файла
+        if (!dead) {
+          setItems((data && data.items) || []);
+        }
+      } catch (e) {
+        console.error("Admin list load error:", e);
+        if (!dead) setItems([]);
+      } finally {
+        if (!dead) setLoading(false);
+      }
+    })();
+    return () => {
+      dead = true;
+    };
+  }, []);
+
+  return (
+    <section className="min-h-screen">
+      <Container className="py-8">
+        <button
+          onClick={onBack}
+          className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm hover:bg-white/10"
+        >
+          ← На головну
+        </button>
+
+        <h1 className="mt-6 text-3xl sm:text-4xl font-extrabold">
+          Адмін • Записи
+        </h1>
+        <p className="text-white/70">
+          Період: {start} — {end}
+        </p>
+
+        <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="text-white/70">
+              <tr>
+                <th className="text-left p-3">Дата</th>
+                <th className="text-left p-3">Час</th>
+                <th className="text-left p-3">Заголовок</th>
+                <th className="text-left p-3">Тривалість</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td className="p-3" colSpan={4}>
+                    Завантаження…
+                  </td>
+                </tr>
+              ) : items.length === 0 ? (
+                <tr>
+                  <td className="p-3" colSpan={4}>
+                    Немає записів
+                  </td>
+                </tr>
+              ) : (
+                items
+                  .sort((a, b) => new Date(a.startISO) - new Date(b.startISO))
+                  .map((ev) => {
+                    const s = new Date(ev.startISO);
+                    const e = new Date(ev.endISO);
+                    const durMin = Math.round((e - s) / 60000);
+                    return (
+                      <tr key={ev.id} className="border-t border-white/10">
+                        <td className="p-3">{s.toLocaleDateString("uk-UA")}</td>
+                        <td className="p-3">
+                          {s.toTimeString().slice(0, 5)}–
+                          {e.toTimeString().slice(0, 5)}
+                        </td>
+                        <td className="p-3">{ev.title}</td>
+                        <td className="p-3">{durMin} хв</td>
+                      </tr>
+                    );
+                  })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Container>
+    </section>
+  );
+}
+
+/* ------------------------- ВСПОМОГАТЕЛЬНЫЕ UI ------------------------- */
 function Container({ children, className = "" }) {
   return (
     <div
@@ -70,6 +612,57 @@ function Container({ children, className = "" }) {
     </div>
   );
 }
+
+function Card({ title, children }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+      {title && <h3 className="font-semibold mb-4">{title}</h3>}
+      {children}
+    </div>
+  );
+}
+
+function Field({ label, value, onChange, placeholder = "" }) {
+  return (
+    <label className="block">
+      <div className="text-sm text-white/60 mb-1">{label}</div>
+      <input
+        className="w-full rounded-xl bg-neutral-900/60 border border-white/10 px-4 py-2 outline-none focus:border-white/30"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
+    </label>
+  );
+}
+
+function Select({ value, onChange, options }) {
+  return (
+    <select
+      value={value}
+      onChange={onChange}
+      className="w-full rounded-xl bg-neutral-900/60 border border-white/10 px-4 py-2 outline-none focus:border-white/30"
+    >
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function formatDay(iso) {
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString("uk-UA", {
+    weekday: "short",
+    day: "2-digit",
+    month: "long",
+  });
+}
+
+/* ------------------------- ДАЛЬШЕ — ВЕСЬ ТВОЙ ЛЕНДИНГ ------------------------- */
+/* Header / Hero / Sections / Icons — как у тебя, только меняем onCta на goBooking */
 
 function SiteHeader({ onCta, mobileMenuOpen, setMobileMenuOpen }) {
   const nav = [
@@ -101,14 +694,16 @@ function SiteHeader({ onCta, mobileMenuOpen, setMobileMenuOpen }) {
           ))}
           <a
             href="/booking"
-            onClick={onCta}
+            onClick={(e) => {
+              e.preventDefault();
+              onCta();
+            }}
             className="inline-flex items-center gap-2 rounded-xl bg-white text-neutral-900 px-4 py-2 text-sm font-semibold hover:bg-white/90 transition shadow"
           >
             <BoltIcon className="h-4 w-4" /> Записатись
           </a>
         </nav>
 
-        {/* Mobile menu button */}
         <button
           className="md:hidden inline-flex items-center justify-center rounded-xl border border-white/10 p-2 hover:bg-white/5 transition"
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -118,7 +713,6 @@ function SiteHeader({ onCta, mobileMenuOpen, setMobileMenuOpen }) {
         </button>
       </Container>
 
-      {/* Mobile menu */}
       {mobileMenuOpen && (
         <div className="md:hidden border-t border-white/5 bg-neutral-950/90 backdrop-blur">
           <Container className="py-3 space-y-1">
@@ -135,8 +729,9 @@ function SiteHeader({ onCta, mobileMenuOpen, setMobileMenuOpen }) {
             <a
               href="/booking"
               onClick={(e) => {
-                onCta(e);
+                e.preventDefault();
                 setMobileMenuOpen(false);
+                onCta();
               }}
               className="block rounded-lg px-3 py-2 font-semibold bg-white text-neutral-900"
             >
@@ -149,10 +744,11 @@ function SiteHeader({ onCta, mobileMenuOpen, setMobileMenuOpen }) {
   );
 }
 
+/* ----- Остальные секции лендинга (без изменений, только onCta) ----- */
+
 function Hero({ onCta }) {
   return (
     <section id="top" className="relative overflow-hidden">
-      {/* Background */}
       <div className="absolute inset-0 -z-10">
         <div className="absolute -top-24 -left-24 h-72 w-72 rounded-full bg-gradient-to-tr from-rose-600/40 to-amber-500/30 blur-3xl" />
         <div className="absolute top-40 -right-24 h-80 w-80 rounded-full bg-gradient-to-tr from-sky-500/30 to-emerald-500/30 blur-3xl" />
@@ -176,7 +772,10 @@ function Hero({ onCta }) {
           <div className="mt-8 flex flex-wrap items-center gap-3">
             <a
               href="/booking"
-              onClick={onCta}
+              onClick={(e) => {
+                e.preventDefault();
+                onCta();
+              }}
               className="inline-flex items-center gap-2 rounded-2xl bg-white text-neutral-900 px-6 py-3 font-semibold shadow hover:bg-white/90 transition"
             >
               <BoltIcon className="h-5 w-5" /> Записатись
@@ -230,7 +829,10 @@ function Benefits({ onCta }) {
               <p className="mt-2 text-sm text-white/70">{b.desc}</p>
               <a
                 href="/booking"
-                onClick={onCta}
+                onClick={(e) => {
+                  e.preventDefault();
+                  onCta();
+                }}
                 className="mt-4 inline-block text-sm font-semibold text-white hover:opacity-80"
               >
                 Записатись →
@@ -300,7 +902,10 @@ function Services({ onCta }) {
                 <span>⏱ {s.time}</span>
                 <a
                   href="/booking"
-                  onClick={onCta}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onCta();
+                  }}
                   className="font-semibold text-white hover:opacity-80"
                 >
                   Записатись →
@@ -367,7 +972,10 @@ function Barbers({ onCta }) {
               <p className="mt-4 text-sm text-white/70">{b.bio}</p>
               <a
                 href="/booking"
-                onClick={onCta}
+                onClick={(e) => {
+                  e.preventDefault();
+                  onCta();
+                }}
                 className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-white hover:opacity-80"
               >
                 Записатись до {b.name} <ArrowRightIcon className="h-4 w-4" />
@@ -381,7 +989,6 @@ function Barbers({ onCta }) {
 }
 
 function Gallery() {
-  // Проста декоративна галерея з градієнтними плитками (без зображень)
   return (
     <section id="gallery" className="py-16 border-y border-white/5 bg-white/5">
       <Container>
@@ -467,7 +1074,10 @@ function Contacts({ onCta }) {
             <div className="pt-2">
               <a
                 href="/booking"
-                onClick={onCta}
+                onClick={(e) => {
+                  e.preventDefault();
+                  onCta();
+                }}
                 className="inline-flex items-center gap-2 rounded-2xl bg-white text-neutral-900 px-6 py-3 font-semibold shadow hover:bg-white/90 transition"
               >
                 <BoltIcon className="h-5 w-5" /> Записатись
@@ -475,7 +1085,6 @@ function Contacts({ onCta }) {
             </div>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
-            {/* Заглушка під карту */}
             <div className="aspect-[16/10] w-full rounded-xl bg-gradient-to-br from-white/15 to-white/5 grid place-items-center text-white/60 text-sm">
               Карта з'явиться пізніше
             </div>
@@ -503,7 +1112,10 @@ function CtaBanner({ onCta }) {
           <div className="mt-6">
             <a
               href="/booking"
-              onClick={onCta}
+              onClick={(e) => {
+                e.preventDefault();
+                onCta();
+              }}
               className="inline-flex items-center gap-2 rounded-2xl bg-white text-neutral-900 px-6 py-3 font-semibold shadow hover:bg-white/90 transition"
             >
               <BoltIcon className="h-5 w-5" /> Записатись
@@ -526,6 +1138,9 @@ function SiteFooter({ onCta }) {
           </span>
         </a>
         <div className="flex items-center gap-4 text-sm text-white/60">
+          <p>developed by KsoChibi (Oleh Chudakov)</p>
+        </div>
+        <div className="flex items-center gap-4 text-sm text-white/60">
           <a href="#services" className="hover:text-white">
             Послуги
           </a>
@@ -535,10 +1150,23 @@ function SiteFooter({ onCta }) {
           <a href="#contacts" className="hover:text-white">
             Контакти
           </a>
+          <a
+            href="/admin"
+            onClick={(e) => {
+              e.preventDefault();
+              window.history.pushState({}, "", "/admin");
+            }}
+            className="hover:text-white"
+          >
+            Адмін
+          </a>
         </div>
         <a
           href="/booking"
-          onClick={onCta}
+          onClick={(e) => {
+            e.preventDefault();
+            onCta();
+          }}
           className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-semibold hover:bg-white/10"
         >
           Записатись
@@ -570,7 +1198,7 @@ function ItemRow({ icon, children }) {
   );
 }
 
-/* ---------------- Icons (прості SVG без залежностей) ---------------- */
+/* ---------------- Icons ---------------- */
 function Logo(props) {
   return (
     <svg
@@ -604,7 +1232,6 @@ function Logo(props) {
     </svg>
   );
 }
-
 function MenuIcon(props) {
   return (
     <svg
@@ -624,7 +1251,6 @@ function MenuIcon(props) {
     </svg>
   );
 }
-
 function BoltIcon(props) {
   return (
     <svg
@@ -642,7 +1268,6 @@ function BoltIcon(props) {
     </svg>
   );
 }
-
 function ArrowRightIcon(props) {
   return (
     <svg
@@ -661,7 +1286,6 @@ function ArrowRightIcon(props) {
     </svg>
   );
 }
-
 function StarIcon(props) {
   return (
     <svg
@@ -679,7 +1303,6 @@ function StarIcon(props) {
     </svg>
   );
 }
-
 function BadgeIcon(props) {
   return (
     <svg
@@ -698,7 +1321,6 @@ function BadgeIcon(props) {
     </svg>
   );
 }
-
 function PinIcon(props) {
   return (
     <svg
@@ -717,7 +1339,6 @@ function PinIcon(props) {
     </svg>
   );
 }
-
 function PhoneIcon(props) {
   return (
     <svg
@@ -735,7 +1356,6 @@ function PhoneIcon(props) {
     </svg>
   );
 }
-
 function ChatIcon(props) {
   return (
     <svg
@@ -753,7 +1373,6 @@ function ChatIcon(props) {
     </svg>
   );
 }
-
 function ClockIcon(props) {
   return (
     <svg
@@ -772,7 +1391,6 @@ function ClockIcon(props) {
     </svg>
   );
 }
-
 function SparkleIcon(props) {
   return (
     <svg
