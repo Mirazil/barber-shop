@@ -12,8 +12,6 @@ The main idea of this project is to create a simple **web service for a barber s
 - **book an appointment with a barber online**;
 - automatically **synchronize bookings with the administrator’s Google Calendar**.
 
-The project follows the same structure as the tutorial **Tutor.docx**, from domain models and use cases to deployment.
-
 ---
 
 ## 2. Tech Stack
